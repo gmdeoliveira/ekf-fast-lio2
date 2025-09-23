@@ -11,6 +11,38 @@ The EKF is adapted from the `adaptive_filter` module of EKF-LOAM and incorporate
 
 ---
 
+# Dependencies
+
+- Livox-SDK2:
+
+Please follow the guidance of installation in the [Livox-SDK2/README.md](https://github.com/Livox-SDK/Livox-SDK2/blob/master/README.md)
+
+Summary:
+
+```bash
+git clone https://github.com/Livox-SDK/Livox-SDK2.git
+cd ./Livox-SDK2/
+mkdir build
+cd build
+cmake .. && make -j
+sudo make install
+```
+
+- Livox ROS Driver2: (For ROS1)
+
+Livox ROS Driver 2 is the 2nd-generation driver package used to connect LiDAR products produced by Livox, applicable for ROS (noetic recommended) and ROS2 (foxy or humble recommended). Please follow the guidance of installation in the [livox_ros_driver2](https://github.com/UFMG-Petrobras-OP-1319/livox_ros_driver2.git)
+
+Summary for ROS1:
+```bash
+git clone https://github.com/Livox-SDK/livox_ros_driver2.git
+
+source /opt/ros/noetic/setup.sh
+./build.sh ROS1
+
+```
+
+---
+
 ## 📦 Features
 
 - Real-time adaptive sensor fusion.
