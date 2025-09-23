@@ -1,13 +1,22 @@
-//=====================================================EKF-LOAM=========================================================
-//Project: EspeleoRobô2
-//Institution: Universidade Federal de Minas Gerais (UFMG) and Instituto Tecnológico Vale (ITV)
-//Description: This file is responsible for merging the wheel odometry with the IMU data, the LiDAR odometry and the vi-
-//             sual odometry.
-//Modification: 
-//             Date: August 20, 2023
-//             member: Gilmar Pereira da Cruz Júnior 
-//             e-mail: gilmarpcruzjunior@gmail.com
-//=======================================================================================================================
+//=====================================================EKF-Fast-LIO2=====================================================================
+//Institutions: Federal University of Minas Gerais (UFMG), Federal University of Ouro Preto (UFOP) and Instituto Tecnológico Vale (ITV)
+//Description: This file is responsible for merging the wheel odometry with the IMU data and the Fast-LIO2 odometry.
+//Milestones: 
+//             Date: November 27, 2021
+//             Description: Initial version of the code.
+//             Members: Gilmar Pereira da Cruz Júnior and Adriano Resende
+//             E-mails: gilmarpcruzjunior@gmail.com, adrianomcr18@gmail.com
+//
+//             Date: June 27, 2025
+//             Description: Include the wheel odometry adaptive covariance and the Fast-LIO2 odometry input.
+//             Members: Gilmar Pereira da Cruz Júnior and Gabriel Malaquias
+//             E-mails: gilmarpcruzjunior@gmail.com, gmdeoliveira@ymail.com
+//
+//             Date: September 22, 2025
+//             Description: New version of the code including visual odometry measurement.
+//             Members: Gilmar Pereira da Cruz Júnior and Gabriel Malaquias
+//             E-mails: gilmarpcruzjunior@gmail.com, gmdeoliveira@ymail.com
+//=======================================================================================================================================
 
 #include "settings_adaptive_filter.h"
 
@@ -313,8 +322,9 @@ public:
 
         // measure model
         hx = X.block(3,0,3,1);
-        // wheel measurement
-        Y = imuMeasure.block(6,0,3,1);
+
+        // IMU measurement
+        Y = imuMeasure.block(6,0,3,1); // roll pitch yaw
 
         // Jacobian of hx with respect to the states
         H = Eigen::MatrixXd::Zero(3,N_STATES);
@@ -327,8 +337,21 @@ public:
         S = H*P*H.transpose() + E;
         K = P*H.transpose()*S.inverse();
 
-        // correction
-        X = X + K*(Y - hx);
+        // correction - state
+        Eigen::VectorXd residues(3), KR(N_STATES);
+        residues(0) = atan2(sin(Y(0) - hx(0)), cos(Y(0) - hx(0)));
+        residues(1) = atan2(sin(Y(1) - hx(1)), cos(Y(1) - hx(1)));
+        residues(2) = atan2(sin(Y(2) - hx(2)), cos(Y(2) - hx(2)));
+        KR = K*residues;
+
+        X.block(0,0,3,1) = X.block(0,0,3,1) + KR.block(0,0,3,1);
+        X(3) = atan2(sin(X(3) + KR(3)), cos(X(3) + KR(3)));
+        X(4) = atan2(sin(X(4) + KR(4)), cos(X(4) + KR(4)));
+        X(5) = atan2(sin(X(5) + KR(5)), cos(X(5) + KR(5)));
+        X.block(6,0,6,1) = X.block(6,0,6,1) + KR.block(6,0,6,1);
+
+        // X = X + K*(Y - hx); 
+        // correction - covariance
         P = P - K*H*P;
     }
 
@@ -339,7 +362,7 @@ public:
 
         // measure model
         hx = X.block(6,0,6,1);
-        // visual measurement
+        // lidar measurement
         if (firstLidar){
             lidarMeasureL = lidarMeasure;
             E_lidarL = E_lidar;
@@ -929,6 +952,12 @@ public:
         double t_last = ros::Time::now().toSec();
         double t_now;
         double dt_now;
+        bool pub_lidar, pub_wheel, pub_imu, pub_pred, pub_visual;
+        pub_lidar = false;
+        pub_wheel = false;
+        pub_imu = false;
+        pub_pred = false;
+        pub_visual = false;
 
         while (ros::ok())
         {
@@ -939,12 +968,13 @@ public:
                 dt_now = t_now-t_last;
                 t_last = t_now;
 
-                prediction_stage(1/200.0);
-                // prediction_stage(dt_now);
+                // prediction_stage(1/200.0);
+                prediction_stage(dt_now);
                 
                 // publish state
                 if (filterFreq == "p"){
-                    publish_odom('p');
+                    // publish_odom('p');
+                    pub_pred =  true;
                 }
 
             }
@@ -957,7 +987,8 @@ public:
 
                 // publish state
                 if (filterFreq == "i"){
-                    publish_odom('i');
+                    // publish_odom('i');
+                    pub_imu =  true;
                 }
 
                 // control variable
@@ -971,7 +1002,8 @@ public:
                 correction_wheel_stage(wheel_dt);
 
                 if (filterFreq == "w"){
-                    publish_odom('w');
+                     // publish_odom('w');
+                    pub_wheel = true;
                 }                
 
                 // control variable
@@ -987,7 +1019,8 @@ public:
 
                 // publish state
                 if (filterFreq == "l"){
-                    publish_odom('l');
+                    // publish_odom('l');
+                    pub_lidar = true;
                 }
 
                 // controle variable
@@ -1003,12 +1036,31 @@ public:
 
                 // publish state
                 if (filterFreq == "v"){
-                    publish_odom('v');
+                    // publish_odom('v');
+                    pub_visual = true;
                 }
 
                 // controle variable
                 visualNew =  false;
 
+            }
+
+            // publishing
+            if (pub_pred){
+                publish_odom('p');
+                pub_pred = false;
+            }else if (pub_lidar){
+                publish_odom('l');
+                pub_lidar =  false;
+            }else if (pub_wheel){
+                publish_odom('w');
+                pub_wheel = false;
+            }else if (pub_imu){
+                publish_odom('i');
+                pub_imu = false;
+            }else if (pub_visual){
+                publish_odom('v');
+                pub_visual = false;
             }
 
             // final marker - time: xxx.xx s, imu: true/false, wheel: true/false, visual: true/false

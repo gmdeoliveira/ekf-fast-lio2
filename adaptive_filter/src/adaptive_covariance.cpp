@@ -1,13 +1,13 @@
-//=====================================================EKF-LOAM=========================================================
-//Project: EspeleoRobô2
-//Institution: Universidade Federal de Minas Gerais (UFMG) and Instituto Tecnológico Vale (ITV)
-//Description: This file is responsible for merging the wheel odometry with the IMU data, the LiDAR odometry and the vi-
-//             sual odometry.
-//Modification: 
-//             Date: August 20, 2023
-//             member: Gilmar Pereira da Cruz Júnior 
-//             e-mail: gilmarpcruzjunior@gmail.com
-//=======================================================================================================================
+//=====================================================EKF-Fast-LIO2=====================================================================
+//Institutions: Federal University of Minas Gerais (UFMG), Federal University of Ouro Preto (UFOP) and Instituto Tecnológico Vale (ITV)
+//Description: This file is responsible for merging the wheel odometry with the IMU data and the Fast-LIO2 odometry.
+//Milestones: 
+//
+//             Date: September 22, 2025
+//             Description: New version of the code including visual odometry measurement.
+//             Members: Gilmar Pereira da Cruz Júnior and Gabriel Malaquias
+//             E-mails: gilmarpcruzjunior@gmail.com, gmdeoliveira@ymail.com
+//=======================================================================================================================================
 
 #include "settings_adaptive_filter.h"
 #include <rtabmap_msgs/ResetPose.h>
@@ -40,6 +40,7 @@ private:
     ros::Subscriber subCamRight;
     ros::Subscriber subCamRgb;
     ros::Subscriber subWheelOdometry;
+    ros::Subscriber subImu;
 
     // Publisher
     ros::Publisher pubLiDAROdometry;
@@ -48,8 +49,6 @@ private:
 
     // services
     ros::ServiceClient srv_client_rgbd; 
-
-    nav_msgs::Odometry visualOdometryOut;
 
     // adaptive covariance - lidar odometry
     double nCorner, nSurf; 
@@ -66,6 +65,9 @@ private:
 
     bool first_rgbd;
 
+    // imu measure
+    Eigen::VectorXd imuMeasure;
+
 public:
     bool enableFilter;
     bool enableImu;
@@ -78,7 +80,15 @@ public:
     float wheelG;
     float imuG;
 
-    int type_func;
+    float gamma_vx;
+    float gamma_omegaz;
+    float delta_vx;
+    float delta_omegaz;
+
+    int lidar_type_func;
+    int visual_type_func;
+    int wheel_type_func;
+
     int camera_type;
 
     std::string filterFreq;
@@ -94,8 +104,10 @@ public:
         subVisualOdometry = nh.subscribe<nav_msgs::Odometry>("/t265/odom/sample", 5, &AdaptiveCov::visualOdometryHandler, this);
         subVisualOdometryD = nh.subscribe<nav_msgs::Odometry>("/rtabmap/odom", 5, &AdaptiveCov::visualOdometryDHandler, this);
         subWheelOdometry = nh.subscribe<nav_msgs::Odometry>("/odom", 5, &AdaptiveCov::wheelOdometryHandler, this);
+
+        subImu = nh.subscribe<sensor_msgs::Imu>("/imu/data", 50, &AdaptiveCov::imuHandler, this);
         
-        subPointCloud = nh.subscribe<sensor_msgs::PointCloud2>("/os1_cloud_node/points", 5, &AdaptiveCov::ptCloudHandler, this);
+        // subPointCloud = nh.subscribe<sensor_msgs::PointCloud2>("/os1_cloud_node/points", 5, &AdaptiveCov::ptCloudHandler, this);
         subCamLeft = nh.subscribe<sensor_msgs::Image>("/t265/fisheye2/image_raw", 5, &AdaptiveCov::camLeftHandler, this);
         subCamRight = nh.subscribe<sensor_msgs::Image>("/t265/fisheye1/image_raw", 5, &AdaptiveCov::camRightHandler, this);
         subCamRgb = nh.subscribe<sensor_msgs::Image>("/d435i/color/image_raw", 5, &AdaptiveCov::camRgbHandler, this);
@@ -121,7 +133,11 @@ public:
         enableLidar = false;
         enableVisual = false;
         filterFreq = 'l';
-        type_func = 0;
+
+        lidar_type_func = 0;
+        visual_type_func = 0;
+        wheel_type_func = 0;
+
         camera_type = 1;
 
         lidarG = 1.0;
@@ -158,6 +174,8 @@ public:
 
         first_rgbd = true;
 
+        imuMeasure.resize(9);
+        imuMeasure = Eigen::VectorXd::Zero(9);
     }
 
     MatrixXd adaptive_covariance(double fCorner, double fSurf){
@@ -165,7 +183,7 @@ public:
         double cov_x, cov_y, cov_z, cov_phi, cov_psi, cov_theta;
         
         // heuristic
-        switch(type_func){
+        switch(lidar_type_func){
             case 0:
                 cov_x     = lidarG*((nCorner - min(fCorner,nCorner))/nCorner + l_min);
                 cov_y     = lidarG*((nCorner - min(fCorner,nCorner))/nCorner + l_min);
@@ -182,13 +200,6 @@ public:
                 cov_phi   = lidarG*exp(-lidarG*(nSurf - min(fSurf,nSurf))/nSurf) + l_min;
                 cov_theta = lidarG*exp(-lidarG*(nSurf - min(fSurf,nSurf))/nSurf) + l_min;
                 break;
-            case 2:
-                cov_x     = lidarG*exp(-lidarG*(nCorner - min(fCorner,nCorner))/nCorner) + l_min;
-                cov_y     = lidarG*exp(-lidarG*(nCorner - min(fCorner,nCorner))/nCorner) + l_min;
-                cov_psi   = lidarG*exp(-lidarG*(nCorner - min(fCorner,nCorner))/nCorner) + l_min;
-                cov_z     = lidarG*exp(-lidarG*(nSurf - min(fSurf,nSurf))/nSurf) + l_min;
-                cov_phi   = lidarG*exp(-lidarG*(nSurf - min(fSurf,nSurf))/nSurf) + l_min;
-                cov_theta = lidarG*exp(-lidarG*(nSurf - min(fSurf,nSurf))/nSurf) + l_min;
         }
         
         Q = MatrixXd::Zero(6,6);
@@ -209,15 +220,13 @@ public:
         Intensity = (IntensityIn - minIntensity)/(maxIntensity - minIntensity);
         
         // heuristic
-        switch(type_func){
+        switch(visual_type_func){
             case 0:
                 cov = visualG*((1.0 - min(Intensity,1.0))/1.0 + l_min);
                 break;
             case 1:
                 cov = visualG*exp(-visualG*Intensity) + l_min;
                 break;
-            case 2:
-                cov = visualG*exp(-visualG*Intensity) + l_min;
         }
         
         Q = MatrixXd::Zero(6,6);
@@ -231,28 +240,43 @@ public:
         return Q;
     }
 
+    MatrixXd wheelOdometryAdaptiveCovariance(double omegaz_wheel_odom, double omegaz_imu){
+        Eigen::MatrixXd E(2,2);
+
+        E(0,0) = gamma_vx * abs(omegaz_wheel_odom - omegaz_imu) + delta_vx;
+        E(1,1) = gamma_omegaz * abs(omegaz_wheel_odom - omegaz_imu) + delta_omegaz;
+
+        return E;
+    }     
+
     //----------
     // callbacks
     //----------
     void laserOdometryHandler(const nav_msgs::Odometry::ConstPtr& laserOdometry){
         if (enableFilter && enableLidar){
-            // covariance
-            double corner = double(laserOdometry->twist.twist.linear.x);
-            double surf = double(laserOdometry->twist.twist.angular.x);
-            Eigen::MatrixXd E_lidar(6,6);
-            E_lidar = adaptive_covariance(corner, surf);
-
             // odometry message
             nav_msgs::Odometry lidarOdometryOut;
             lidarOdometryOut.header = laserOdometry->header;
             lidarOdometryOut.pose = laserOdometry->pose;
-            
-            // pose convariance
-            int k = 0;
-            for (int i = 0; i < 6; i++){
-                for (int j = 0; j < 6; j++){
-                    lidarOdometryOut.pose.covariance[k] = E_lidar(i,j);
-                    k++;
+            lidarOdometryOut.twist = laserOdometry->twist;
+
+            // covariance
+            double corner = double(laserOdometry->twist.twist.linear.x);
+            double surf = double(laserOdometry->twist.twist.angular.x);
+            if (lidar_type_func==2){
+                lidarOdometryOut.pose.covariance = laserOdometry->pose.covariance;
+                lidarOdometryOut.twist.covariance = laserOdometry->twist.covariance;
+            }else{
+                Eigen::MatrixXd E_lidar(6,6);
+                E_lidar = adaptive_covariance(corner, surf);
+                
+                // pose convariance
+                int k = 0;
+                for (int i = 0; i < 6; i++){
+                    for (int j = 0; j < 6; j++){
+                        lidarOdometryOut.pose.covariance[k] = E_lidar(i,j);
+                        k++;
+                    }
                 }
             }
 
@@ -261,25 +285,31 @@ public:
     }
 
     void visualOdometryHandler(const nav_msgs::Odometry::ConstPtr& visualOdometry){
-        if (enableFilter && enableVisual && camera_type == 1){
-            averageIntensity = (averageIntensity1 + averageIntensity2)/2;            
-            // averageIntensity = (averageIntensity - minIntensity)/(maxIntensity - minIntensity);
-
-            Eigen::MatrixXd E_visual(6,6);
-            E_visual = adaptive_visual_covariance(averageIntensity);
-
+        if (enableFilter && enableVisual && camera_type == 1){            
             // odometry message
             nav_msgs::Odometry visualOdometryOut;
             visualOdometryOut.header = visualOdometry->header;
             visualOdometryOut.pose = visualOdometry->pose;
             visualOdometryOut.twist = visualOdometry->twist;
-            
-            // pose convariance
-            int k = 0;
-            for (int i = 0; i < 6; i++){
-                for (int j = 0; j < 6; j++){
-                    visualOdometryOut.pose.covariance[k] = E_visual(i,j);
-                    k++;
+
+            if (visual_type_func==2){
+                visualOdometryOut.pose.covariance = visualOdometry->pose.covariance;
+                visualOdometryOut.twist.covariance = visualOdometry->twist.covariance;
+            }else{
+                averageIntensity = (averageIntensity1 + averageIntensity2)/2;            
+                // averageIntensity = (averageIntensity - minIntensity)/(maxIntensity - minIntensity);
+
+                Eigen::MatrixXd E_visual(6,6);
+                E_visual = adaptive_visual_covariance(averageIntensity);
+
+                
+                // pose convariance
+                int k = 0;
+                for (int i = 0; i < 6; i++){
+                    for (int j = 0; j < 6; j++){
+                        visualOdometryOut.pose.covariance[k] = E_visual(i,j);
+                        k++;
+                    }
                 }
             }
 
@@ -288,7 +318,9 @@ public:
         }
     }
 
-     void visualOdometryDHandler(const nav_msgs::Odometry::ConstPtr& visualOdometry){
+    void visualOdometryDHandler(const nav_msgs::Odometry::ConstPtr& visualOdometry){
+        nav_msgs::Odometry visualOdometryOut;
+
         if (enableFilter && enableVisual && camera_type == 2){
             Eigen::MatrixXd E_visual(6,6);
 
@@ -310,39 +342,72 @@ public:
                 // call service
                 srv_client_rgbd.call(poseRgb);
             }else{
-                E_visual = adaptive_visual_covariance(averageIntensity);
-
                 // odometry message
                 visualOdometryOut.header = visualOdometry->header;
                 visualOdometryOut.pose = visualOdometry->pose;
                 visualOdometryOut.twist = visualOdometry->twist;
+
+                if (visual_type_func==2){
+                    visualOdometryOut.pose.covariance = visualOdometry->pose.covariance;
+                    visualOdometryOut.twist.covariance = visualOdometry->twist.covariance;
+                }else{
+                    E_visual = adaptive_visual_covariance(averageIntensity);
                 
-                // pose convariance
-                int k = 0;
-                for (int i = 0; i < 6; i++){
-                    for (int j = 0; j < 6; j++){
-                        visualOdometryOut.pose.covariance[k] = E_visual(i,j);
-                        k++;
+                    // pose convariance
+                    int k = 0;
+                    for (int i = 0; i < 6; i++){
+                        for (int j = 0; j < 6; j++){
+                            visualOdometryOut.pose.covariance[k] = E_visual(i,j);
+                            k++;
+                        }
+                    }
+
+                    if (first_rgbd){
+                        first_rgbd = false;
+                    }else{
+                        pubVisualOdometry.publish(visualOdometryOut);
                     }
                 }
-
-                if (first_rgbd){
-                    first_rgbd = false;
-                }else{
-                    pubVisualOdometry.publish(visualOdometryOut);
-                }
-            }
-
-            
+            }            
         }
     }
 
     void wheelOdometryHandler(const nav_msgs::Odometry::ConstPtr& wheelOdometry){
+        nav_msgs::Odometry wheelOdometryOut;
+        if (enableFilter && enableWheel){
+            // odometry message
+            nav_msgs::Odometry lidarOdometryOut;
+            wheelOdometryOut.header = wheelOdometry->header;
+            wheelOdometryOut.pose = wheelOdometry->pose;
+            wheelOdometryOut.twist = wheelOdometry->twist;
 
+            // covariance
+            if (lidar_type_func==2){
+                wheelOdometryOut.pose.covariance = wheelOdometry->pose.covariance;
+                wheelOdometryOut.twist.covariance = wheelOdometry->twist.covariance;
+            }else{
+                Eigen::MatrixXd E_wheel(2,2);
+                E_wheel = wheelOdometryAdaptiveCovariance(wheelOdometry->twist.twist.angular.z, imuMeasure(5));
+                
+                // pose convariance
+                int k = 0;
+                for (int i = 0; i < 2; i++){
+                    for (int j = 0; j < 2; j++){
+                        wheelOdometryOut.pose.covariance[k] = E_wheel(i,j);
+                        k++;
+                    }
+                }
+            }
+
+            pubWheelOdometry.publish(wheelOdometryOut);
+        }
     }
 
-    void ptCloudHandler(const sensor_msgs::PointCloud2ConstPtr& ptcloudIn){
-
+    void imuHandler(const sensor_msgs::Imu::ConstPtr& imuIn){
+        // measure
+        imuMeasure.block(0,0,3,1) << imuIn->linear_acceleration.x, imuIn->linear_acceleration.y, imuIn->linear_acceleration.z;
+        imuMeasure.block(3,0,3,1) << imuIn->angular_velocity.x, imuIn->angular_velocity.y, imuIn->angular_velocity.z; 
+        // imuMeasure.block(6,0,3,1) << roll, pitch, yaw;
     }
 
     void camLeftHandler(const sensor_msgs::ImageConstPtr& camIn){
@@ -446,7 +511,14 @@ int main(int argc, char** argv)
         nh_.param("/adaptive_filter/visualG", AC.visualG, float(0.05));
         nh_.param("/adaptive_filter/imuG", AC.imuG, float(0.1));
 
-        nh_.param("/adaptive_filter/type_func", AC.type_func, int(0));
+        nh_.param("/adaptive_filter/gamma_vx", AC.gamma_vx, float(0.05));
+        nh_.param("/adaptive_filter/gamma_omegaz", AC.gamma_omegaz, float(0.01));
+        nh_.param("/adaptive_filter/delta_vx", AC.delta_vx, float(0.0001));
+        nh_.param("/adaptive_filter/delta_omegaz", AC.delta_omegaz, float(0.00001));
+
+        nh_.param("/adaptive_filter/lidar_type_func", AC.lidar_type_func, int(2));
+        nh_.param("/adaptive_filter/visual_type_func", AC.visual_type_func, int(2));
+        nh_.param("/adaptive_filter/wheel_type_func", AC.wheel_type_func, int(1));
 
         nh_.param("/adaptive_filter/camera_type", AC.camera_type, int(0));
     }
@@ -455,7 +527,6 @@ int main(int argc, char** argv)
         ROS_INFO("\033[1;31mAdaptive Covariance:\033[0m Exception occurred when importing parameters in Adaptive Covariance Node. Exception Nr. %d", e);
     }
     
-
     if (AC.enableFilter){
         ROS_INFO("\033[1;32mAdaptive Covariance:\033[0m Started.");
         // runs

@@ -24,15 +24,10 @@
   delta_vx: 0.0001
   delta_omegaz: 0.00001
 
-  # Topic names
-  imuTopic: "/imu"
-  wheelTopic: "/odom"
-  FastLIO2_OdometryTopic: "/Odometry"
-  cameraTopic: "/odom"
-  filterTopic: "/filter_odom"
-
   # type of adaptative function
-  type_func: 0                        # 0: linear; 1: exponential; 3: Fuzzy with 2 states; 4: original message
+  lidar_type_func: 0                        # 0: linear; 1: exponential; 2: original message
+  visual_type_func: 0                       # 0: linear; 1: exponential; 2: original message
+  wheel_type_func: 0                        # 0: our function; 1: original message
 
   # type of cameras
   camera_type: 2                      # 1: tracking; 2: depth

@@ -321,7 +321,7 @@ public:
 
         // measure model
         hx = X.block(6,0,6,1);
-        // wheel measurement
+        // lidar measurement
         Y = indirect_lidar_measurement(lidarMeasure, lidarMeasureL, dt);
 
         // Jacobian of hx with respect to the states
