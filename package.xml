@@ -24,6 +24,9 @@
   <build_depend>pcl_ros</build_depend>
   <build_depend>livox_ros_driver2</build_depend>
   <build_depend>message_generation</build_depend>
+  
+  <build_depend>adaptive_filter</build_depend>
+  <exec_depend>adaptive_filter</exec_depend>
 
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>

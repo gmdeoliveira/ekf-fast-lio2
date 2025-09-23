@@ -82,17 +82,10 @@ catkin_package(
   CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs message_runtime
   DEPENDS EIGEN3 PCL
   INCLUDE_DIRS
+  CATKIN_DEPENDS adaptive_filter
 )
 
 add_executable(fastlio_mapping src/laserMapping.cpp include/ikd-Tree/ikd_Tree.cpp src/preprocess.cpp)
 target_link_libraries(fastlio_mapping ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${PYTHON_LIBRARIES})
 target_include_directories(fastlio_mapping PRIVATE ${PYTHON_INCLUDE_DIRS})
 
-## Node executable
-add_executable(EKFAdaptiveFilter
-  src/EKFAdaptiveFilter.cpp
-)
-
-target_link_libraries(EKFAdaptiveFilter
-  ${catkin_LIBRARIES}
-)

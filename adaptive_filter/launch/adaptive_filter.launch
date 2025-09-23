@@ -1,0 +1,28 @@
+<launch>
+
+    <!-- arguments -->
+    <arg name = "filter"    value = "true" />
+    <arg name = "cov"    value = "true" />
+    
+    <rosparam command="load" file="$(find adaptive_filter)/config/adaptive_filter_parameters.yaml" />
+    <rosparam command="load" file="$(find ekf_loam)/config/ekf_loam_parameters.yaml" /> 
+    
+    <!-- Filter -->
+    <node if="$(arg filter)"
+    	  pkg="adaptive_filter" 
+          type="EKFAdaptiveFilter"     
+          name="EKFAdaptiveFilter"     
+          output="screen">
+          <remap from="/imu/data" to="/d435i/imu/data"/>
+    </node> 
+    
+    <!-- State Machine -->
+    <node if="$(arg cov)"
+    	  pkg="adaptive_filter" 
+          type="adaptive_covariance"     
+          name="adaptive_covariance"     
+          output="screen">
+    </node> 
+    
+
+</launch>
