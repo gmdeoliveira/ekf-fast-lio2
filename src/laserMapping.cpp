@@ -56,14 +56,492 @@
 #include <tf/transform_datatypes.h>
 #include <tf/transform_broadcaster.h>
 #include <geometry_msgs/Vector3.h>
-#include <livox_ros_driver2/CustomMsg.h>
+#include <livox_ros_driver/CustomMsg.h>
 #include "preprocess.h"
 #include <ikd-Tree/ikd_Tree.h>
+#include <adaptive_odom_filter/ekf_adaptive_tools.h>
 
 #define INIT_TIME           (0.1)
 #define LASER_POINT_COV     (0.001)
 #define MAXN                (720000)
 #define PUBFRAME_PERIOD     (20)
+
+
+//==========================================================================
+// ADAPTIVE FILTER - Open
+//==========================================================================
+#include <sensor_msgs/Imu.h>
+#include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/Image.h>
+#include <nav_msgs/Odometry.h>
+#include <rtabmap_msgs/ResetPose.h>
+
+// public
+bool enableFilter;
+bool enableImu;
+bool enableWheel;
+bool enableLidar;
+bool enableVisual;
+
+double freq;
+
+double alpha_lidar;
+double alpha_visual;
+
+float lidarG;
+float visualG;
+float wheelG;
+float imuG;
+
+float gamma_vx;
+float gamma_omegaz;
+float delta_vx;
+float delta_omegaz;
+
+double minIntensity; 
+double maxIntensity;
+
+int lidar_type_func;
+int visual_type_func;
+int wheel_type_func;
+
+int camera_type;
+
+std::string filterFreq;
+
+// private
+// Subscriber
+ros::Subscriber subImu;
+ros::Subscriber subWheelOdometry;
+ros::Subscriber subVisualOdometry;
+ros::Subscriber subVisualOdometryD;
+ros::Subscriber subCamLeft;
+ros::Subscriber subCamRight;
+ros::Subscriber subCamRgb;
+
+// Publisher
+ros::Publisher pubFilteredOdometry;
+
+// header
+std_msgs::Header headerI;
+std_msgs::Header headerW;
+std_msgs::Header headerL;
+std_msgs::Header headerV;
+
+// services
+ros::ServiceClient srv_client_rgbd;
+
+// TF 
+tf::StampedTransform filteredOdometryTrans;
+tf::TransformBroadcaster tfBroadcasterfiltered;
+
+// filtered odom
+nav_msgs::Odometry filteredOdometry;
+
+// Times
+double imuTimeLast;
+double wheelTimeLast;
+double lidarTimeLast;
+double visualTimeLast;
+
+double imuTimeCurrent;
+double wheelTimeCurrent;
+double lidarTimeCurrent;
+double visualTimeCurrent;
+
+double imu_dt;
+double wheel_dt;
+double lidar_dt;
+double visual_dt;
+
+// boolean
+bool imuActivated;
+bool wheelActivated;
+bool lidarActivated;
+bool visualActivated;
+
+// adaptive covariance - visual odometry
+double averageIntensity1;
+double averageIntensity2;
+double averageIntensity;
+
+// filter constructor 
+AdaptiveOdomFilter filter;
+
+// Measure
+Eigen::VectorXd imuMeasure, wheelMeasure, lidarMeasure, visualMeasure;
+
+// Measure Covariance
+Eigen::MatrixXd E_imu, E_wheel, E_lidar, E_visual;
+
+// States and covariances
+Eigen::VectorXd X;
+Eigen::MatrixXd P;
+
+bool firstLidarPublish = false;
+
+// auxiliar
+float cRoll, sRoll, cPitch, sPitch, cYaw, sYaw, tX, tY, tZ;
+
+// initialization
+void initialization_adaptive_filter(){
+    // times
+    imuTimeLast = 0;
+    lidarTimeLast = 0;
+    visualTimeLast = 0;
+    wheelTimeLast = 0;
+
+    imuTimeCurrent = 0;
+    lidarTimeCurrent = 0;
+    visualTimeCurrent = 0;
+    wheelTimeCurrent = 0;
+
+    imu_dt = 0.005;
+    wheel_dt = 0.05;
+    lidar_dt = 0.1;
+    visual_dt = 0.005;
+
+    alpha_visual = 0.98;
+    alpha_lidar = 0.98;
+
+    // filter 
+    freq = 200.0;
+
+    // boolean
+    imuActivated = false;
+    lidarActivated = false;
+    wheelActivated = false;
+    visualActivated = false;
+
+    enableFilter = false;
+    enableImu = false;
+    enableWheel = false;
+    enableLidar = false;
+    enableVisual = false;
+
+    wheelG = 0; // delete
+    imuG = 0;
+
+    // adaptive covariance - visual odometry
+    averageIntensity1 = 0;
+    averageIntensity2 = 0;
+    averageIntensity = 0;
+
+    // measure
+    imuMeasure.resize(9);
+    wheelMeasure.resize(2);
+    lidarMeasure.resize(6);
+    visualMeasure.resize(6);
+
+    imuMeasure = Eigen::VectorXd::Zero(9);
+    wheelMeasure = Eigen::VectorXd::Zero(2);
+    lidarMeasure = Eigen::VectorXd::Zero(6);
+    visualMeasure = Eigen::VectorXd::Zero(6);
+
+    E_imu.resize(9,9);
+    E_wheel.resize(2,2);
+    E_lidar.resize(6,6);
+    E_visual.resize(6,6);
+
+    E_imu = Eigen::MatrixXd::Zero(9,9);
+    E_lidar = Eigen::MatrixXd::Zero(6,6);
+    E_visual = Eigen::MatrixXd::Zero(6,6);
+    E_wheel = Eigen::MatrixXd::Zero(2,2);
+
+    X.resize(12);
+    P.resize(12,12);
+    X = Eigen::VectorXd::Zero(12);
+    P = Eigen::MatrixXd::Zero(12,12);
+}
+
+void filter_initialization(){
+    // setting the filter
+    filter.enableImu = enableImu;
+    filter.enableWheel = enableWheel;
+    filter.enableLidar = enableLidar;
+    filter.enableVisual = enableVisual;
+    filter.lidar_type_func = lidar_type_func;
+    filter.visual_type_func = visual_type_func;
+    filter.wheel_type_func = wheel_type_func;
+
+    filter.freq = freq;
+
+    // there are other parameters to set, i.e., the priori state with your covariance matrix
+}
+
+//----------
+// callbacks
+//----------
+void imuHandler(const sensor_msgs::Imu::ConstPtr& imuIn){
+    double timeL = ros::Time::now().toSec();
+
+    // time
+    if (imuActivated){
+        imuTimeLast = imuTimeCurrent;
+        imuTimeCurrent = imuIn->header.stamp.toSec();
+    }else{
+        imuTimeCurrent = imuIn->header.stamp.toSec();
+        imuTimeLast = imuTimeCurrent + 0.001;
+        imuActivated = true;
+    }       
+
+    // roll, pitch and yaw 
+    double roll, pitch, yaw;
+    geometry_msgs::Quaternion orientation = imuIn->orientation;
+    tf::Matrix3x3(tf::Quaternion(orientation.x, orientation.y, orientation.z, orientation.w)).getRPY(roll, pitch, yaw);
+
+    // measure
+    imuMeasure.block(0,0,3,1) << imuIn->linear_acceleration.x, imuIn->linear_acceleration.y, imuIn->linear_acceleration.z;
+    imuMeasure.block(3,0,3,1) << imuIn->angular_velocity.x, imuIn->angular_velocity.y, imuIn->angular_velocity.z; 
+    imuMeasure.block(6,0,3,1) << roll, pitch, yaw;
+
+    // covariance
+    E_imu.block(0,0,3,3) << imuIn->linear_acceleration_covariance[0], imuIn->linear_acceleration_covariance[1], imuIn->linear_acceleration_covariance[2],
+                            imuIn->linear_acceleration_covariance[3], imuIn->linear_acceleration_covariance[4], imuIn->linear_acceleration_covariance[5],
+                            imuIn->linear_acceleration_covariance[6], imuIn->linear_acceleration_covariance[7], imuIn->linear_acceleration_covariance[8];
+    E_imu.block(3,3,3,3) << imuIn->angular_velocity_covariance[0], imuIn->angular_velocity_covariance[1], imuIn->angular_velocity_covariance[2],
+                            imuIn->angular_velocity_covariance[3], imuIn->angular_velocity_covariance[4], imuIn->angular_velocity_covariance[5],
+                            imuIn->angular_velocity_covariance[6], imuIn->angular_velocity_covariance[7], imuIn->angular_velocity_covariance[8];
+    E_imu.block(6,6,3,3) << imuIn->orientation_covariance[0], imuIn->orientation_covariance[1], imuIn->orientation_covariance[2],
+                            imuIn->orientation_covariance[3], imuIn->orientation_covariance[4], imuIn->orientation_covariance[5],
+                            imuIn->orientation_covariance[6], imuIn->orientation_covariance[7], imuIn->orientation_covariance[8];
+
+    E_imu.block(6,6,3,3) = imuG*E_imu.block(6,6,3,3);
+
+    // time
+    imu_dt = imuTimeCurrent - imuTimeLast;
+    imu_dt = 0.01;
+
+    // header
+    double timediff = ros::Time::now().toSec() - timeL + imuTimeCurrent;
+    headerI = imuIn->header;
+    headerI.stamp = ros::Time().fromSec(timediff);
+
+    // correction stage aqui
+    filter.correction_imu_data(imuMeasure, E_imu, imu_dt);
+}
+
+void wheelOdometryHandler(const nav_msgs::Odometry::ConstPtr& wheelOdometry){
+    double timeL = ros::Time::now().toSec();
+
+    // time
+    if (wheelActivated){
+        wheelTimeLast = wheelTimeCurrent;
+        wheelTimeCurrent = wheelOdometry->header.stamp.toSec();
+    }else{
+        wheelTimeCurrent = wheelOdometry->header.stamp.toSec();
+        wheelTimeLast = wheelTimeCurrent + 0.01;
+        wheelActivated = true;
+    } 
+
+    // measure
+    wheelMeasure << -1.0*wheelOdometry->twist.twist.linear.x, wheelOdometry->twist.twist.angular.z;
+
+    // covariance
+    E_wheel(0,0) = wheelG*wheelOdometry->twist.covariance[0];
+    E_wheel(1,1) = 100*wheelOdometry->twist.covariance[35];
+
+    // time
+    wheel_dt = wheelTimeCurrent - wheelTimeLast;
+
+    // header
+    double timediff = ros::Time::now().toSec() - timeL + wheelTimeCurrent;
+    headerW = wheelOdometry->header;
+    headerW.stamp = ros::Time().fromSec(timediff);
+
+    // correction stage aqui
+    filter.correction_wheel_data(wheelMeasure, E_wheel, wheel_dt, imuMeasure(5));
+}
+
+void visualOdometryHandler(const nav_msgs::Odometry::ConstPtr& visualOdometry){
+    if (camera_type == 1){ 
+        double timeV = ros::Time::now().toSec();
+
+        if (visualActivated){
+            visualTimeLast = visualTimeCurrent;
+            visualTimeCurrent = visualOdometry->header.stamp.toSec();
+        }else{
+            visualTimeCurrent = visualOdometry->header.stamp.toSec();
+            visualTimeLast = visualTimeCurrent + 0.01;
+            visualActivated = true;
+        }  
+        
+        // roll, pitch and yaw 
+        double roll, pitch, yaw;
+        geometry_msgs::Quaternion orientation = visualOdometry->pose.pose.orientation;
+        tf::Matrix3x3(tf::Quaternion(orientation.x, orientation.y, orientation.z, orientation.w)).getRPY(roll, pitch, yaw);
+
+        visualMeasure.block(0,0,3,1) << visualOdometry->pose.pose.position.x, visualOdometry->pose.pose.position.y, visualOdometry->pose.pose.position.z;
+        visualMeasure.block(3,0,3,1) << roll, pitch, yaw;    
+
+        // covariance
+        E_visual(0,0) = visualOdometry->pose.covariance[0];
+        E_visual(0,1) = visualOdometry->pose.covariance[1];
+        E_visual(0,2) = visualOdometry->pose.covariance[2];
+        E_visual(1,0) = visualOdometry->pose.covariance[3];
+        E_visual(1,1) = visualOdometry->pose.covariance[4];
+        E_visual(1,2) = visualOdometry->pose.covariance[5];
+        E_visual(2,0) = visualOdometry->pose.covariance[6];
+        E_visual(2,1) = visualOdometry->pose.covariance[7];
+        E_visual(2,2) = visualOdometry->pose.covariance[8];
+
+        // time
+        visual_dt = visualTimeCurrent - visualTimeLast;
+
+        // header
+        double timediff = ros::Time::now().toSec() - timeV + visualTimeCurrent;
+        headerV = visualOdometry->header;
+        headerV.stamp = ros::Time().fromSec(timediff);
+        
+        // compute average intensity
+        averageIntensity = (averageIntensity1 + averageIntensity2)/2;
+
+        //New measure
+        filter.correction_visual_data(visualMeasure, E_visual, visual_dt, averageIntensity);
+    }
+}
+
+void visualOdometryDHandler(const nav_msgs::Odometry::ConstPtr& visualOdometry){
+    if (enableFilter && enableVisual && camera_type == 2){
+        Eigen::MatrixXd E_visual(6,6);
+
+        if (visualOdometry->pose.covariance[0] >= 9999.0 && visualOdometry->pose.pose.position.x == 0 && visualOdometry->pose.pose.position.y == 0 && visualOdometry->pose.pose.position.z == 0){
+            // reset pose 
+            rtabmap_msgs::ResetPose poseRgb;
+            poseRgb.request.x = visualOdometry->pose.pose.position.x;
+            poseRgb.request.y = visualOdometry->pose.pose.position.y;
+            poseRgb.request.z = visualOdometry->pose.pose.position.z;
+
+            double roll, pitch, yaw;
+            geometry_msgs::Quaternion orientation = visualOdometry->pose.pose.orientation;
+            tf::Matrix3x3(tf::Quaternion(orientation.x, orientation.y, orientation.z, orientation.w)).getRPY(roll, pitch, yaw);
+
+            poseRgb.request.roll = roll;
+            poseRgb.request.pitch = pitch;
+            poseRgb.request.yaw = yaw;
+
+            // call service
+            srv_client_rgbd.call(poseRgb);
+        }else{
+            double timeV = ros::Time::now().toSec();
+
+            if (visualActivated){
+                visualTimeLast = visualTimeCurrent;
+                visualTimeCurrent = visualOdometry->header.stamp.toSec();
+            }else{
+                visualTimeCurrent = visualOdometry->header.stamp.toSec();
+                visualTimeLast = visualTimeCurrent + 0.01;
+                visualActivated = true;
+            }  
+            
+            // roll, pitch and yaw 
+            double roll, pitch, yaw;
+            geometry_msgs::Quaternion orientation = visualOdometry->pose.pose.orientation;
+            tf::Matrix3x3(tf::Quaternion(orientation.x, orientation.y, orientation.z, orientation.w)).getRPY(roll, pitch, yaw);
+
+            visualMeasure.block(0,0,3,1) << visualOdometry->pose.pose.position.x, visualOdometry->pose.pose.position.y, visualOdometry->pose.pose.position.z;
+            visualMeasure.block(3,0,3,1) << roll, pitch, yaw;    
+
+            // covariance
+            E_visual(0,0) = visualOdometry->pose.covariance[0];
+            E_visual(0,1) = visualOdometry->pose.covariance[1];
+            E_visual(0,2) = visualOdometry->pose.covariance[2];
+            E_visual(1,0) = visualOdometry->pose.covariance[3];
+            E_visual(1,1) = visualOdometry->pose.covariance[4];
+            E_visual(1,2) = visualOdometry->pose.covariance[5];
+            E_visual(2,0) = visualOdometry->pose.covariance[6];
+            E_visual(2,1) = visualOdometry->pose.covariance[7];
+            E_visual(2,2) = visualOdometry->pose.covariance[8];
+
+            // time
+            visual_dt = visualTimeCurrent - visualTimeLast;
+            // visual_dt = 0.05;
+
+            // header
+            double timediff = ros::Time::now().toSec() - timeV + visualTimeCurrent;
+            headerV = visualOdometry->header;
+            headerV.stamp = ros::Time().fromSec(timediff);
+            
+            //New measure
+            filter.correction_visual_data(visualMeasure, E_visual, visual_dt, averageIntensity);
+        }            
+    }
+}
+
+void camLeftHandler(const sensor_msgs::ImageConstPtr& camIn){
+    int width = camIn->width;
+    int height = camIn->height;
+
+    int numPixels = width * height;
+    double intensitySum = 0.0;
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int pixelIndex = y * width + x;
+            uint8_t intensity = camIn->data[pixelIndex];
+
+            intensitySum += intensity;
+        }
+    }
+
+    averageIntensity2 = intensitySum / numPixels;
+}
+
+void camRightHandler(const sensor_msgs::ImageConstPtr& camIn){
+    int width = camIn->width;
+    int height = camIn->height;
+
+    int numPixels = width * height;
+    double intensitySum = 0.0;
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int pixelIndex = y * width + x;
+            uint8_t intensity = camIn->data[pixelIndex];
+
+            intensitySum += intensity;
+        }
+    }
+
+    averageIntensity1 = intensitySum / numPixels;
+}
+
+void camRgbHandler(const sensor_msgs::ImageConstPtr& camIn){
+    int width = camIn->width;
+    int height = camIn->height;
+    int numPixels = width * height;
+
+    // Calculate pixel step size
+    size_t pixel_step = camIn->step / camIn->width;
+
+    // Define weights for RGB channels
+    double redWeight = 0.2989;
+    double greenWeight = 0.5870;
+    double blueWeight = 0.1140;
+    double intensitySum = 0.0;
+
+
+    // Loop through image data and compute intensity
+    for (size_t y = 0; y < camIn->height; ++y){
+        for (size_t x = 0; x < camIn->width; ++x){
+            size_t index = y * camIn->step + x * pixel_step;
+
+            // Access RGB values
+            uint8_t r = camIn->data[index];
+            uint8_t g = camIn->data[index + 1];
+            uint8_t b = camIn->data[index + 2];
+
+            // Compute intensity using weighted average of RGB values
+            intensitySum += redWeight * double(r) + greenWeight * double(g) + blueWeight * double(b);
+        }
+    }
+
+    averageIntensity = intensitySum / numPixels;
+}
+
+//==========================================================================
+// ADAPTIVE FILTER - Close
+//==========================================================================
 
 /*** Time Log Variables ***/
 double kdtree_incremental_time = 0.0, kdtree_search_time = 0.0, kdtree_delete_time = 0.0;
@@ -130,6 +608,7 @@ M3D Lidar_R_wrt_IMU(Eye3d);
 MeasureGroup Measures;
 esekfom::esekf<state_ikfom, 12, input_ikfom> kf;
 state_ikfom state_point;
+state_ikfom state_point_map;
 vect3 pos_lid;
 
 nav_msgs::Path path;
@@ -183,6 +662,41 @@ void pointBodyToWorld(PointType const * const pi, PointType * const po)
     po->x = p_global(0);
     po->y = p_global(1);
     po->z = p_global(2);
+    po->intensity = pi->intensity;
+}
+
+void updatePointAssociateToMapSinCos(){
+    // orientation
+    double roll, pitch, yaw;
+    tf::Matrix3x3(tf::Quaternion(state_point_map.rot.coeffs()[0], state_point_map.rot.coeffs()[1], state_point_map.rot.coeffs()[2], state_point_map.rot.coeffs()[3])).getRPY(roll, pitch, yaw);
+            
+    cRoll = cos(roll);
+    sRoll = sin(roll);
+
+    cPitch = cos(pitch);
+    sPitch = sin(pitch);
+
+    cYaw = cos(yaw);
+    sYaw = sin(yaw);
+
+    tX = state_point_map.pos(0);
+    tY = state_point_map.pos(1);
+    tZ = state_point_map.pos(2);
+}
+
+void pointBodyToWorldFilter(PointType const * const pi, PointType * const po)
+{
+    float x1 = cYaw * pi->x - sYaw * pi->y;
+    float y1 = sYaw * pi->x + cYaw * pi->y;
+    float z1 = pi->z;
+
+    float x2 = x1;
+    float y2 = cRoll * y1 - sRoll * z1;
+    float z2 = sRoll * y1 + cRoll * z1;
+
+    po->x = cPitch * x2 + sPitch * z2 + tX;
+    po->y = y2 + tY;
+    po->z = -sPitch * x2 + cPitch * z2 + tZ;
     po->intensity = pi->intensity;
 }
 
@@ -299,7 +813,7 @@ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
 
 double timediff_lidar_wrt_imu = 0.0;
 bool   timediff_set_flg = false;
-void livox_pcl_cbk(const livox_ros_driver2::CustomMsg::ConstPtr &msg) 
+void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg) 
 {
     mtx_buffer.lock();
     double preprocess_start_time = omp_get_wtime();
@@ -430,10 +944,15 @@ void map_incremental()
     PointVector PointNoNeedDownsample;
     PointToAdd.reserve(feats_down_size);
     PointNoNeedDownsample.reserve(feats_down_size);
+
+    // aqui
+    updatePointAssociateToMapSinCos();
+
     for (int i = 0; i < feats_down_size; i++)
     {
-        /* transform to world frame */
-        pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));
+        /* transform to world frame - change here - create another function to use the filtered pose */ 
+        // pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));
+        pointBodyToWorldFilter(&(feats_down_body->points[i]), &(feats_down_world->points[i]));
         /* decide if need add to map */
         if (!Nearest_Points[i].empty() && flg_EKF_inited)
         {
@@ -619,6 +1138,38 @@ void publish_odometry(const ros::Publisher & pubOdomAftMapped)
     br.sendTransform( tf::StampedTransform( transform, odomAftMapped.header.stamp, "camera_init", "body" ) );
 }
 
+void publish_odometry_filter(const ros::Publisher & pubFilteredOdometry, Eigen::MatrixXd Eo)
+{
+    nav_msgs::Odometry odomFilter;
+    odomFilter.header.frame_id = "camera_init";
+    odomFilter.child_frame_id = "body_filter";
+    odomFilter.header.stamp = ros::Time().fromSec(lidar_end_time);// ros::Time().fromSec(lidar_end_time);
+
+    // adicionar aqui
+    odomFilter.pose.pose.position.x = state_point_map.pos(0);
+    odomFilter.pose.pose.position.x = state_point_map.pos(0);
+    odomFilter.pose.pose.position.x = state_point_map.pos(0);    
+    odomFilter.pose.pose.orientation.x = state_point_map.rot.coeffs()[0];
+    odomFilter.pose.pose.orientation.y = state_point_map.rot.coeffs()[1];
+    odomFilter.pose.pose.orientation.z = state_point_map.rot.coeffs()[2];
+    odomFilter.pose.pose.orientation.w = state_point_map.rot.coeffs()[3];
+    
+    pubFilteredOdometry.publish(odomFilter);
+
+    static tf::TransformBroadcaster br;
+    tf::Transform                   transform;
+    tf::Quaternion                  q;
+    transform.setOrigin(tf::Vector3(odomFilter.pose.pose.position.x, \
+                                    odomFilter.pose.pose.position.y, \
+                                    odomFilter.pose.pose.position.z));
+    q.setW(odomFilter.pose.pose.orientation.w);
+    q.setX(odomFilter.pose.pose.orientation.x);
+    q.setY(odomFilter.pose.pose.orientation.y);
+    q.setZ(odomFilter.pose.pose.orientation.z);
+    transform.setRotation( q );
+    br.sendTransform( tf::StampedTransform( transform, odomFilter.header.stamp, "camera_init", "body_filter" ) );
+}
+
 void publish_path(const ros::Publisher pubPath)
 {
     set_posestamp(msg_body_pose);
@@ -753,44 +1304,104 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
     solve_time += omp_get_wtime() - solve_start_;
 }
 
+
+
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "laserMapping");
-    ros::NodeHandle nh;
 
-    nh.param<bool>("publish/path_en",path_en, true);
-    nh.param<bool>("publish/scan_publish_en",scan_pub_en, true);
-    nh.param<bool>("publish/dense_publish_en",dense_pub_en, true);
-    nh.param<bool>("publish/scan_bodyframe_pub_en",scan_body_pub_en, true);
-    nh.param<int>("max_iteration",NUM_MAX_ITERATIONS,4);
-    nh.param<string>("map_file_path",map_file_path,"");
-    nh.param<string>("common/lid_topic",lid_topic,"/livox/lidar");
-    nh.param<string>("common/imu_topic", imu_topic,"/livox/imu");
-    nh.param<bool>("common/time_sync_en", time_sync_en, false);
-    nh.param<double>("common/time_offset_lidar_to_imu", time_diff_lidar_to_imu, 0.0);
-    nh.param<double>("filter_size_corner",filter_size_corner_min,0.5);
-    nh.param<double>("filter_size_surf",filter_size_surf_min,0.5);
-    nh.param<double>("filter_size_map",filter_size_map_min,0.5);
-    nh.param<double>("cube_side_length",cube_len,200);
-    nh.param<float>("mapping/det_range",DET_RANGE,300.f);
-    nh.param<double>("mapping/fov_degree",fov_deg,180);
-    nh.param<double>("mapping/gyr_cov",gyr_cov,0.1);
-    nh.param<double>("mapping/acc_cov",acc_cov,0.1);
-    nh.param<double>("mapping/b_gyr_cov",b_gyr_cov,0.0001);
-    nh.param<double>("mapping/b_acc_cov",b_acc_cov,0.0001);
-    nh.param<double>("preprocess/blind", p_pre->blind, 0.01);
-    nh.param<int>("preprocess/lidar_type", lidar_type, AVIA);
-    nh.param<int>("preprocess/scan_line", p_pre->N_SCANS, 16);
-    nh.param<int>("preprocess/timestamp_unit", p_pre->time_unit, US);
-    nh.param<int>("preprocess/scan_rate", p_pre->SCAN_RATE, 10);
-    nh.param<int>("point_filter_num", p_pre->point_filter_num, 2);
-    nh.param<bool>("feature_extract_enable", p_pre->feature_enabled, false);
-    nh.param<bool>("runtime_pos_log_enable", runtime_pos_log, 0);
-    nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
-    nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en, false);
-    nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
-    nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
-    nh.param<vector<double>>("mapping/extrinsic_R", extrinR, vector<double>());
+    // adaptive_odom_filter AF;
+
+    //==========================================================================
+    // ADAPTIVE FILTER - Open
+    //==========================================================================
+    initialization_adaptive_filter();
+    //==========================================================================
+    // ADAPTIVE FILTER - Close
+    //==========================================================================
+
+    //Parameters init:    
+    ros::NodeHandle nh_;
+    try
+    {
+        nh_.param<bool>("publish/path_en",path_en, true);
+        nh_.param<bool>("publish/scan_publish_en",scan_pub_en, true);
+        nh_.param<bool>("publish/dense_publish_en",dense_pub_en, true);
+        nh_.param<bool>("publish/scan_bodyframe_pub_en",scan_body_pub_en, true);
+        nh_.param<int>("max_iteration",NUM_MAX_ITERATIONS,4);
+        nh_.param<string>("map_file_path",map_file_path,"");
+        nh_.param<string>("common/lid_topic",lid_topic,"/livox/lidar");
+        nh_.param<string>("common/imu_topic", imu_topic,"/livox/imu");
+        nh_.param<bool>("common/time_sync_en", time_sync_en, false);
+        nh_.param<double>("common/time_offset_lidar_to_imu", time_diff_lidar_to_imu, 0.0);
+        nh_.param<double>("filter_size_corner",filter_size_corner_min,0.5);
+        nh_.param<double>("filter_size_surf",filter_size_surf_min,0.5);
+        nh_.param<double>("filter_size_map",filter_size_map_min,0.5);
+        nh_.param<double>("cube_side_length",cube_len,200);
+        nh_.param<float>("mapping/det_range",DET_RANGE,300.f);
+        nh_.param<double>("mapping/fov_degree",fov_deg,180);
+        nh_.param<double>("mapping/gyr_cov",gyr_cov,0.1);
+        nh_.param<double>("mapping/acc_cov",acc_cov,0.1);
+        nh_.param<double>("mapping/b_gyr_cov",b_gyr_cov,0.0001);
+        nh_.param<double>("mapping/b_acc_cov",b_acc_cov,0.0001);
+        nh_.param<double>("preprocess/blind", p_pre->blind, 0.01);
+        nh_.param<int>("preprocess/lidar_type", lidar_type, AVIA);
+        nh_.param<int>("preprocess/scan_line", p_pre->N_SCANS, 16);
+        nh_.param<int>("preprocess/timestamp_unit", p_pre->time_unit, US);
+        nh_.param<int>("preprocess/scan_rate", p_pre->SCAN_RATE, 10);
+        nh_.param<int>("point_filter_num", p_pre->point_filter_num, 2);
+        nh_.param<bool>("feature_extract_enable", p_pre->feature_enabled, false);
+        nh_.param<bool>("runtime_pos_log_enable", runtime_pos_log, 0);
+        nh_.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
+        nh_.param<bool>("pcd_save/pcd_save_en", pcd_save_en, false);
+        nh_.param<int>("pcd_save/interval", pcd_save_interval, -1);
+        nh_.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
+        nh_.param<vector<double>>("mapping/extrinsic_R", extrinR, vector<double>());
+
+        //==========================================================================
+        // ADAPTIVE FILTER - Open
+        //==========================================================================
+        nh_.param("/adaptive_filter/enableFilter", enableFilter, false);
+        nh_.param("/adaptive_filter/enableImu", enableImu, false);
+        nh_.param("/adaptive_filter/enableWheel", enableWheel, false);
+        nh_.param("/adaptive_filter/enableLidar", enableLidar, false);
+        nh_.param("/adaptive_filter/enableVisual", enableVisual, false);
+
+        nh_.param("/adaptive_filter/filterFreq", filterFreq, std::string("l"));
+        nh_.param("/adaptive_filter/freq", freq, double(200.0));
+
+        nh_.param("/adaptive_filter/wheelG", wheelG, float(0.05));
+        nh_.param("/adaptive_filter/imuG", imuG, float(0.1));
+
+        nh_.param("/adaptive_filter/alpha_lidar", alpha_lidar, double(0.98));
+        nh_.param("/adaptive_filter/alpha_visual", alpha_visual, double(0.98));
+
+        nh_.param("/adaptive_filter/lidarG", lidarG, float(1000));
+        nh_.param("/adaptive_filter/wheelG", wheelG, float(0.05));
+        nh_.param("/adaptive_filter/visualG", visualG, float(0.05));
+        nh_.param("/adaptive_filter/imuG", imuG, float(0.1));
+
+        nh_.param("/adaptive_filter/gamma_vx", gamma_vx, float(0.05));
+        nh_.param("/adaptive_filter/gamma_omegaz", gamma_omegaz, float(0.01));
+        nh_.param("/adaptive_filter/delta_vx", delta_vx, float(0.0001));
+        nh_.param("/adaptive_filter/delta_omegaz", delta_omegaz, float(0.00001));
+
+        nh_.param("/adaptive_filter/minIntensity", minIntensity, double(0.0));
+        nh_.param("/adaptive_filter/maxIntensity", maxIntensity, double(1.0));
+
+        nh_.param("/adaptive_filter/lidar_type_func", lidar_type_func, int(2));
+        nh_.param("/adaptive_filter/visual_type_func", visual_type_func, int(2));
+        nh_.param("/adaptive_filter/wheel_type_func", wheel_type_func, int(1));
+
+        nh_.param("/adaptive_filter/camera_type", camera_type, int(0));
+        //==========================================================================
+        // ADAPTIVE FILTER - Close
+        //==========================================================================
+    }
+    catch (int e)
+    {
+        ROS_INFO("\033[1;31mEKF-Fast-LIO2:\033[0m Exception occurred when importing parameters in Li/DARMapping Node. Exception Nr. %d", e);
+    }
 
     p_pre->lidar_type = lidar_type;
     cout<<"p_pre->lidar_type "<<p_pre->lidar_type<<endl;
@@ -808,7 +1419,6 @@ int main(int argc, char** argv)
 
     _featsArray.reset(new PointCloudXYZI());
 
-    //memset is a command to fill the large variable with a specific value 
     memset(point_selected_surf, true, sizeof(point_selected_surf));
     memset(res_last, -1000.0f, sizeof(res_last));
     downSizeFilterSurf.setLeafSize(filter_size_surf_min, filter_size_surf_min, filter_size_surf_min);
@@ -844,21 +1454,58 @@ int main(int argc, char** argv)
 
     /*** ROS subscribe initialization ***/
     ros::Subscriber sub_pcl = p_pre->lidar_type == AVIA ? \
-        nh.subscribe(lid_topic, 200000, livox_pcl_cbk) : \
-        nh.subscribe(lid_topic, 200000, standard_pcl_cbk);
-    ros::Subscriber sub_imu = nh.subscribe(imu_topic, 200000, imu_cbk);
-    ros::Publisher pubLaserCloudFull = nh.advertise<sensor_msgs::PointCloud2>
+        nh_.subscribe(lid_topic, 200000, livox_pcl_cbk) : \
+        nh_.subscribe(lid_topic, 200000, standard_pcl_cbk);
+    ros::Subscriber sub_imu = nh_.subscribe(imu_topic, 200000, imu_cbk);
+    ros::Publisher pubLaserCloudFull = nh_.advertise<sensor_msgs::PointCloud2>
             ("/cloud_registered", 100000);
-    ros::Publisher pubLaserCloudFull_body = nh.advertise<sensor_msgs::PointCloud2>
+    ros::Publisher pubLaserCloudFull_body = nh_.advertise<sensor_msgs::PointCloud2>
             ("/cloud_registered_body", 100000);
-    ros::Publisher pubLaserCloudEffect = nh.advertise<sensor_msgs::PointCloud2>
+    ros::Publisher pubLaserCloudEffect = nh_.advertise<sensor_msgs::PointCloud2>
             ("/cloud_effected", 100000);
-    ros::Publisher pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>
+    ros::Publisher pubLaserCloudMap = nh_.advertise<sensor_msgs::PointCloud2>
             ("/Laser_map", 100000);
-    ros::Publisher pubOdomAftMapped = nh.advertise<nav_msgs::Odometry> 
+    ros::Publisher pubOdomAftMapped = nh_.advertise<nav_msgs::Odometry> 
             ("/Odometry", 100000);
-    ros::Publisher pubPath          = nh.advertise<nav_msgs::Path> 
+    ros::Publisher pubPath          = nh_.advertise<nav_msgs::Path> 
             ("/path", 100000);
+
+    //==========================================================================
+    // ADAPTIVE FILTER - Open
+    //==========================================================================
+    // Subscriber  
+    subWheelOdometry = nh_.subscribe<nav_msgs::Odometry>("/odom", 5, wheelOdometryHandler);
+    subImu = nh_.subscribe<sensor_msgs::Imu>("/imu/data", 50, imuHandler);
+    
+    if (camera_type==1){
+        subVisualOdometry = nh_.subscribe<nav_msgs::Odometry>("/tracking_odom", 5, visualOdometryHandler);
+        subCamLeft = nh_.subscribe<sensor_msgs::Image>("/left_camera", 5, camLeftHandler);
+        subCamRight = nh_.subscribe<sensor_msgs::Image>("/rigth_camera", 5, camRightHandler);
+    }else if (camera_type==2){
+        subVisualOdometryD = nh_.subscribe<nav_msgs::Odometry>("/depth_odom", 5, visualOdometryDHandler);
+        subCamRgb = nh_.subscribe<sensor_msgs::Image>("/camera_color", 5, camRgbHandler);
+    }
+        
+    // Publisher
+    pubFilteredOdometry = nh_.advertise<nav_msgs::Odometry> ("/filter_odom", 5);
+
+    // Services
+    srv_client_rgbd = nh_.serviceClient<rtabmap_msgs::ResetPose>("/rtabmap/reset_odom_to_pose");
+
+    // filter initialaization
+    filter_initialization();
+
+    if (enableFilter){
+        // runs
+        filter.start();
+        ROS_INFO("\033[1;32mAdaptive Filter:\033[0m Started.");
+    }else{
+        filter.stop();
+        ROS_INFO("\033[1;32mAdaptive Filter: \033[0m Stopped.");
+    }
+    //==========================================================================
+    // ADAPTIVE FILTER - Close
+    //==========================================================================
 //------------------------------------------------------------------------------------------------------
     signal(SIGINT, SigHandle);
     ros::Rate rate(5000);
@@ -940,7 +1587,7 @@ int main(int argc, char** argv)
             fout_pre<<setw(20)<<Measures.lidar_beg_time - first_lidar_time<<" "<<euler_cur.transpose()<<" "<< state_point.pos.transpose()<<" "<<ext_euler.transpose() << " "<<state_point.offset_T_L_I.transpose()<< " " << state_point.vel.transpose() \
             <<" "<<state_point.bg.transpose()<<" "<<state_point.ba.transpose()<<" "<<state_point.grav<< endl;
 
-            if(0) // If you need to see map point, change to "if(1)"
+            if(1) // If you need to see map point, change to "if(1)"
             {
                 PointVector ().swap(ikdtree.PCL_Storage);
                 ikdtree.flatten(ikdtree.Root_Node, ikdtree.PCL_Storage, NOT_RECORD);
@@ -960,6 +1607,66 @@ int main(int argc, char** argv)
             double solve_H_time = 0;
             kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
             state_point = kf.get_x();
+
+            /***************Insert the adapttive filter here **********************/
+            // update state_point or create a filtered pose to increment the map or the undistort the point cloud as mentioned before in the code.
+            //==========================================================================
+            // ADAPTIVE FILTER - Open
+            //==========================================================================
+            // auto state_p = kf.get_x();
+            auto P = kf.get_P();
+
+            // measurement
+            Eigen::VectorXd lidarMeasure(6), X_out(12);
+            Eigen::MatrixXd E_lidar(6,6), E_out(12,12);
+
+            // postion
+            lidarMeasure.block(0,0,3,1) << state_point.pos(0), state_point.pos(1), state_point.pos(2);  
+            // orientation
+            double roll, pitch, yaw;
+            tf::Matrix3x3(tf::Quaternion(state_point_map.rot.coeffs()[0], state_point_map.rot.coeffs()[1], state_point_map.rot.coeffs()[2], state_point_map.rot.coeffs()[3])).getRPY(roll, pitch, yaw);
+            // auto euler_c = SO3ToEuler(state_point.rot); // eigen??
+            lidarMeasure.block(3,0,3,1) << roll, pitch, yaw;
+            // covariancia
+            E_lidar = P;
+
+            // time
+            if (firstLidarPublish){
+                lidarTimeLast = lidarTimeCurrent;
+                lidarTimeCurrent = lidar_end_time;
+            }else{
+                lidarTimeCurrent = lidar_end_time;
+                lidarTimeLast = lidarTimeCurrent + 0.01;
+                firstLidarPublish = true;
+            }
+            
+            // time diff
+            lidar_dt = lidarTimeCurrent - lidarTimeLast;
+
+            // correction stage
+            filter.correction_lidar_data(lidarMeasure, E_lidar, lidar_dt, 0.0, 0.0); // parei aqui. adicionar flag para publicação??
+
+            // get state here
+            filter.get_state(X_out, E_out);
+
+            // change fast-lio2 results
+            state_point_map.pos(0) = X_out(0);
+            state_point_map.pos(1) = X_out(1);
+            state_point_map.pos(2) = X_out(2);
+            tf::Quaternion q;
+            q.setRPY(X_out(3), X_out(4), X_out(5));
+            state_point_map.rot.coeffs()[0] = q.x();
+            state_point_map.rot.coeffs()[1] = q.y();
+            state_point_map.rot.coeffs()[2] = q.z();
+            state_point_map.rot.coeffs()[3] = q.w();
+
+            publish_odometry_filter(pubFilteredOdometry, E_out);
+
+            //==========================================================================
+            // ADAPTIVE FILTER - Close
+            //==========================================================================
+            // publisher - normal
+
             euler_cur = SO3ToEuler(state_point.rot);
             pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
             geoQuat.x = state_point.rot.coeffs()[0];

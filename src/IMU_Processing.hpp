@@ -348,7 +348,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
 void ImuProcess::Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, PointCloudXYZI::Ptr cur_pcl_un_)
 {
   double t1,t2,t3;
-  t1 = omp_get_wtime(); //returns a value equal to the elapsed wall clock time in seconds since some time-in-the-past
+  t1 = omp_get_wtime();
 
   if(meas.imu.empty()) {return;};
   ROS_ASSERT(meas.lidar != nullptr);
