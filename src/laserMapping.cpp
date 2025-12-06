@@ -206,6 +206,8 @@ private:
     V3D position_last;
     V3D Lidar_T_wrt_IMU;
     M3D Lidar_R_wrt_IMU;
+    V3D ext_T;
+    M3D ext_R;
 
     double epsi[23];
     double total_residual;
@@ -1843,8 +1845,28 @@ int main(int argc, char** argv)
         nh_.param("mapping/extrinsic_est_en", fastlio.extrinsic_est_en, true);
         nh_.param("pcd_save/pcd_save_en", fastlio.pcd_save_en, false);
         nh_.param("pcd_save/interval", fastlio.pcd_save_interval, int(-1));
-        nh_.param("mapping/extrinsic_T", fastlio.extrinT, vector<double>());
-        nh_.param("mapping/extrinsic_R", fastlio.extrinR, vector<double>());
+
+        std::vector<double> extrinT;
+        std::vector<double> extrinR;
+
+        if (!nh_.getParam("mapping/extrinsic_T", extrinT) || !nh_.getParam("mapping/extrinsic_R", extrinR))
+        {
+            ROS_FATAL("Failed to load extrinsic parameters. Shutting down.");
+            ros::shutdown();
+            return 1; // Saia imediatamente se os parâmetros não puderem ser carregados
+        }
+
+        if (extrinT.size() != 3 || extrinR.size() != 9)
+        {
+            ROS_FATAL("Extrinsic parameters have incorrect size. T needs 3 elements, R needs 9.");
+            ros::shutdown();
+            return 1; // Saia se os tamanhos estiverem errados
+        }
+
+        ext_T = V3D(extrinT[0], extrinT[1], extrinT[2]);
+        ext_R = M3D(extrinR[0], extrinR[1], extrinR[2],
+                    extrinR[3], extrinR[4], extrinR[5],
+                    extrinR[6], extrinR[7], extrinR[8]);
 
         nh_.param("/adaptive_filter/enableFilter", fastlio.enableFilter, false);
         nh_.param("/adaptive_filter/enableImu", fastlio.enableImu, false);

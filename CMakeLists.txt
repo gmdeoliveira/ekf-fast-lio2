@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 2.8.3)
-project(ekf_fast_lio)
+project(ekf_fast_lio2)
 
 SET(CMAKE_BUILD_TYPE "Debug")
 

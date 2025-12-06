@@ -1,18 +1,18 @@
 <launch>
 	<!-- Launch file for Livox MID360 LiDAR -->
 
-	<arg name="rviz" default="true" />
+	<arg name="rviz" default="false" />
 	<!-- arguments -->
 	<arg name="filter"              value="true" />
 	<arg name="test"                value="false" />
 
 	<!-- Inputs adapted to the script's topics -->
 	<arg name="imu"                 value="/imu/data" />
-	<arg name="lidar_slam_odom"     value="/lidar/odom" />
+	<arg name="lidar_slam_odom"     value="/Odometry" />
 	<arg name="tracking_camera_odom" value="/camera/odom" />
 	<!-- No separate visual SLAM odom from the script -->
 	<arg name="depth_camera_odom"   value="/camera/odom" />
-	<arg name="wheel_odom"          value="/odom" />
+	<arg name="wheel_odom"          value="/wheel_odom" />
 
 	<!-- Unused sensors (commented) -->
 	<arg name="stereo_cam_left"     value="/t265/fisheye2/image_raw" />
@@ -23,8 +23,8 @@
 	<arg name="filter_odom"         value="/filter_odom" />
 	<arg name="rtabmap_service"     value="/rtabmap/reset_odom_to_pose" />
 
-	<rosparam command="load" file="$(find ekf_fast_lio)/config/adaptive_filter_parameters.yaml" />
-	<rosparam command="load" file="$(find ekf_fast_lio)/config/mid360.yaml" />
+	<rosparam command="load" file="$(find ekf_fast_lio2)/config/adaptive_filter_parameters.yaml" />
+	<rosparam command="load" file="$(find ekf_fast_lio2)/config/mid360.yaml" />
 
 	<param name="feature_extract_enable" type="bool" value="0"/>
 	<param name="point_filter_num" type="int" value="3"/>
@@ -35,8 +35,8 @@
 	<param name="runtime_pos_log_enable" type="bool" value="0" />
 
 	<!-- fast-lio -->
-    <node pkg="ekf_fast_lio" type="fastlio_mapping" name="laserMapping" output="screen" >
-		<remap from="/imu/data"                        to="$(arg imu)"/>
+    <node pkg="ekf_fast_lio2" type="fastlio_mapping" name="laserMapping" output="screen" launch-prefix="gdb -ex run --args">
+		<!--remap from="/imu/data"                        to="$(arg imu)"/>
 		<remap from="/lidar_odom"                      to="$(arg lidar_slam_odom)"/>
 		<remap from="/tracking_odom"                   to="$(arg tracking_camera_odom)"/>
 		<remap from="/depth_odom"                      to="$(arg depth_camera_odom)"/>
@@ -45,14 +45,14 @@
 		<remap from="/rigth_camera"                    to="$(arg stereo_cam_right)"/>
 		<remap from="/camera_color"                    to="$(arg color_image)"/>
 		<remap from="/filter_odom"                     to="$(arg filter_odom)"/>
-		<remap from="/rtabmap/reset_odom_to_pose"      to="$(arg rtabmap_service)"/>
+		<remap from="/rtabmap/reset_odom_to_pose"      to="$(arg rtabmap_service)"/-->
 	</node>
 
 	<!-- Imu Complementary Filter -->
-	<include file="$(find imu_complementary_filter)/launch/complementary_filter.launch" /> 
+	<!--<include file="$(find imu_complementary_filter)/launch/complementary_filter.launch" /> -->
 
 	<group if="$(arg rviz)">
-	<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find ekf_fast_lio)/rviz_cfg/loam_livox.rviz" />
+	<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find ekf_fast_lio2)/rviz_cfg/loam_livox.rviz" />
 	</group>
 
 </launch>
