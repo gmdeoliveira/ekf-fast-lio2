@@ -13,8 +13,8 @@
   imuG: 100
 
   # Topic names
-  imuTopic: "/imu"
-  wheelTopic: "/odom"
+  imuTopic: "/imu/data"
+  wheelTopic: "/wheel_odom"
   FastLIO2_OdometryTopic: "/Odometry"
   filterTopic: "/filter_odom"
 
