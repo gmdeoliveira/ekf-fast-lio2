@@ -2,29 +2,9 @@
 	<!-- Launch file for Livox MID360 LiDAR -->
 
 	<arg name="rviz" default="false" />
-	<!-- arguments -->
-	<arg name="filter"              value="true" />
-	<arg name="test"                value="false" />
-
-	<!-- Inputs adapted to the script's topics -->
-	<arg name="imu"                 value="/imu/data" />
-	<arg name="lidar_slam_odom"     value="/Odometry" />
-	<arg name="tracking_camera_odom" value="/camera/odom" />
-	<!-- No separate visual SLAM odom from the script -->
-	<arg name="depth_camera_odom"   value="/camera/odom" />
-	<arg name="wheel_odom"          value="/wheel_odom" />
-
-	<!-- Unused sensors (commented) -->
-	<arg name="stereo_cam_left"     value="/t265/fisheye2/image_raw" />
-	<arg name="stereo_cam_right"    value="/t265/fisheye1/image_raw" />
-	<arg name="color_image"         value="/d435i/color/image_raw" />
-
-	<!-- Outputs (keep or adjust as your downstream expects) -->
-	<arg name="filter_odom"         value="/filter_odom" />
-	<arg name="rtabmap_service"     value="/rtabmap/reset_odom_to_pose" />
 
 	<rosparam command="load" file="$(find ekf_fast_lio2)/config/adaptive_filter_parameters.yaml" />
-	<rosparam command="load" file="$(find ekf_fast_lio2)/config/mid360.yaml" />
+	<rosparam command="load" file="$(find ekf_fast_lio2)/config/mid360_CustomMsg_gazebo.yaml" />
 
 	<param name="feature_extract_enable" type="bool" value="0"/>
 	<param name="point_filter_num" type="int" value="3"/>
@@ -35,7 +15,7 @@
 	<param name="runtime_pos_log_enable" type="bool" value="0" />
 
 	<!-- fast-lio -->
-    <node pkg="ekf_fast_lio2" type="fastlio_mapping" name="laserMapping" output="screen" launch-prefix="gdb -ex run --args">
+    <node pkg="ekf_fast_lio2" type="fastlio_mapping" name="laserMapping" output="screen" launch-prefix="nice">
 		<!--remap from="/imu/data"                        to="$(arg imu)"/>
 		<remap from="/lidar_odom"                      to="$(arg lidar_slam_odom)"/>
 		<remap from="/tracking_odom"                   to="$(arg tracking_camera_odom)"/>
