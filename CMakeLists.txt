@@ -4,7 +4,6 @@ project(ekf_fast_lio2)
 SET(CMAKE_BUILD_TYPE "Debug")
 
 ADD_COMPILE_OPTIONS(-std=c++14 )
-ADD_COMPILE_OPTIONS(-std=c++14 )
 set( CMAKE_CXX_FLAGS "-std=c++14 -O3" )
 
 add_definitions(-DROOT_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/\")
@@ -95,4 +94,13 @@ add_executable(EKFAdaptiveFilter
 
 target_link_libraries(EKFAdaptiveFilter
   ${catkin_LIBRARIES}
+)
+
+## Map builder node
+add_executable(mapBuilder
+  src/mapBuilder.cpp
+)
+target_link_libraries(mapBuilder
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
 )

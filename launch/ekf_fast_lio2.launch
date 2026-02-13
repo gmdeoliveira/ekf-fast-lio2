@@ -22,4 +22,20 @@
         type="EKFAdaptiveFilter" 
         name="EKFAdaptiveFilter" 
         output="screen"/>
+
+	  <!-- Launch the map builder node -->
+  <node pkg="ekf_fast_lio2"
+        type="mapBuilder"
+        name="mapBuilder"
+        output="screen">
+    <param name="odom_topic"       value="/filter_odom" />
+    <param name="lidar_topic"      value="/livox/lidar_CustomMsg" />
+    <param name="map_topic"        value="/map_cloud" />
+    <param name="map_frame"        value="chassis_init" />
+    <param name="save_path"        value="/home/gabriel/PROFICAM/maps/ekf_fast_lio2/globalMap.pcd" />
+    <param name="map_voxel_size"   value="0.2" />
+    <param name="scan_voxel_size"  value="0.1" />
+    <param name="publish_interval" value="10" />
+    <param name="blind"            value="0.5" />
+  </node>
 </launch>
