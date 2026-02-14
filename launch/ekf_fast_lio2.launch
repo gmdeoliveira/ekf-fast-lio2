@@ -28,15 +28,17 @@
         type="mapBuilder"
         name="mapBuilder"
         output="screen">
-    <param name="mapBuilder/odom_topic"        value="/filter_odom" />
-    <param name="mapBuilder/lidar_topic"       value="/livox/lidar_CustomMsg" />
-    <param name="mapBuilder/map_topic"         value="/map_cloud" />
-    <param name="mapBuilder/map_frame"         value="chassis_init" />
-    <param name="mapBuilder/save_path"         value="$(find ekf_fast_lio2)/PCD/globalMap.pcd" />
-    <param name="mapBuilder/map_voxel_size"    value="0.2" />
-    <param name="mapBuilder/scan_voxel_size"   value="0.1" />
-    <param name="mapBuilder/pcd_save_interval" value="-1" />
-    <param name="mapBuilder/blind"             value="0.5" />
-    <param name="mapBuilder/publish_map_en"    value="true" />
+    <param name="odom_topic"          value="/filter_odom" />
+    <param name="lidar_topic"         value="/livox/lidar_CustomMsg" />
+    <param name="map_topic"           value="/map_cloud" />
+    <param name="map_frame"           value="chassis_init" />
+    <param name="save_path"           value="$(find ekf_fast_lio2)/PCD/globalMap_ikdTree.pcd" />
+    <param name="map_voxel_size"      value="0.2" />
+    <param name="scan_voxel_size"     value="0.1" />
+    <param name="filter_size_map_min" value="0.2" />
+    <param name="pcd_save_interval"   value="-1" />
+    <param name="blind"               value="0.5" />
+    <param name="publish_map_en"      value="false" />
+    <param name="use_ikdtree"         value="true" />
   </node>
 </launch>

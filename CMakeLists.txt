@@ -99,6 +99,7 @@ target_link_libraries(EKFAdaptiveFilter
 ## Map builder node
 add_executable(mapBuilder
   src/mapBuilder.cpp
+  include/ikd-Tree/ikd_Tree.cpp
 )
 target_link_libraries(mapBuilder
   ${catkin_LIBRARIES}

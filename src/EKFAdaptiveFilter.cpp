@@ -539,7 +539,9 @@ public:
 
         // time
         imu_dt = imuTimeCurrent - imuTimeLast;
-        imu_dt = 0.02;
+        if (imu_dt <= 0 || imu_dt > 0.1) {
+             imu_dt = 0.02; // Default fallback if dt is invalid
+        }
 
         // header
         double timediff = ros::Time::now().toSec() - timeL + imuTimeCurrent;
@@ -570,7 +572,9 @@ public:
 
         // time
         wheel_dt = wheelTimeCurrent - wheelTimeLast;
-        wheel_dt = 0.02;
+        if (wheel_dt <= 0 || wheel_dt > 0.1) {
+            wheel_dt = 0.05; // Default fallback
+        }
 
         // header
         double timediff = ros::Time::now().toSec() - timeL + wheelTimeCurrent;
@@ -618,7 +622,9 @@ public:
 
         // time
         lidar_dt = lidarTimeCurrent - lidarTimeLast;
-        lidar_dt = 0.1;
+        if (lidar_dt <= 0 || lidar_dt > 0.2) {
+            lidar_dt = 0.1; // Default fallback
+        }
 
         // header
         double timediff = ros::Time::now().toSec() - timeL + lidarTimeCurrent;
