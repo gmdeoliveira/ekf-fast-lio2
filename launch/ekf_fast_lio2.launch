@@ -28,17 +28,37 @@
         type="mapBuilder"
         name="mapBuilder"
         output="screen">
+    <!-- Odometry and output -->
     <param name="odom_topic"          value="/filter_odom" />
-    <param name="lidar_topic"         value="/livox/lidar_CustomMsg" />
     <param name="map_topic"           value="/map_cloud" />
     <param name="map_frame"           value="chassis_init" />
-    <param name="save_path"           value="$(find ekf_fast_lio2)/PCD/globalMap_ikdTree.pcd" />
+    <param name="save_path"           value="$(find ekf_fast_lio2)/PCD/globalMap.pcd" />
+
+    <!-- Point cloud input mode:
+         use_custom_msg = false (default, RECOMMENDED):
+             Subscribes to /cloud_registered_body (PointCloud2).
+             This cloud is already undistorted and in the IMU body frame.
+             Produces the cleanest map.
+         use_custom_msg = true:
+             Subscribes to /livox/lidar_CustomMsg (raw Livox data).
+             The LiDAR-to-IMU extrinsic is applied, but per-point
+             undistortion is NOT applied. Some residual smearing may
+             occur at high angular rates. -->
+    <param name="use_custom_msg"      value="false" />
+    <param name="lidar_topic"         value="/livox/lidar_CustomMsg" />
+    <param name="cloud_body_topic"    value="/cloud_registered_body" />
+
+    <!-- Map building mode -->
+    <param name="use_ikdtree"         value="true" />
+    <param name="filter_size_map_min" value="0.2" />
+
+    <!-- Voxel sizes and filtering -->
     <param name="map_voxel_size"      value="0.2" />
     <param name="scan_voxel_size"     value="0.1" />
-    <param name="filter_size_map_min" value="0.2" />
-    <param name="pcd_save_interval"   value="-1" />
     <param name="blind"               value="0.5" />
-    <param name="publish_map_en"      value="false" />
-    <param name="use_ikdtree"         value="true" />
+    <param name="pcd_save_interval"   value="-1" />
+
+    <!-- Publishing -->
+    <param name="publish_map_en"      value="true" />
   </node>
 </launch>
