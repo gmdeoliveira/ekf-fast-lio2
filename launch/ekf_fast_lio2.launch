@@ -28,6 +28,7 @@
         type="mapBuilder"
         name="mapBuilder"
         output="screen">
+
     <!-- Odometry and output -->
     <param name="odom_topic"          value="/filter_odom" />
     <param name="map_topic"           value="/map_cloud" />
@@ -62,6 +63,9 @@
     <param name="publish_map_en"      value="true" />
 
     <!-- Flat ground mode: for robots on flat surfaces, constrain roll and pitch to zero -->
-    <param name="flat_ground_mode" value="false" />
+    <param name="flat_ground_mode" value="true" />
+
+    <!-- Temporal offset to correct for time lag between sensors -->
+    <param name="temporal_offset" value="0.2" />
   </node>
 </launch>

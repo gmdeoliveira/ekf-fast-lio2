@@ -36,6 +36,20 @@
 //            and position. Useful for ground robots on flat surfaces where small roll/pitch
 //            oscillations from the filter cause map shaking. The yaw angle is extracted from
 //            the quaternion and used to construct a new quaternion with roll=0, pitch=0.
+//
+//  Temporal synchronization (controlled by the 'temporal_offset' parameter):
+//      - temporal_offset = 0.0 (default): No time offset applied.
+//      - temporal_offset > 0: Shift the scan timestamp forward in time. Use this if the
+//            odometry lags behind the scan (e.g., temporal_offset = 0.05 shifts by +50ms).
+//      - temporal_offset < 0: Shift the scan timestamp backward in time. Use this if the
+//            odometry leads the scan.
+//      This parameter is crucial for fixing horizontal ghosting caused by temporal misalignment
+//      between the LiDAR and the filter odometry at curves and turns.
+//
+//  Motion compensation (controlled by the 'enable_motion_compensation' parameter):
+//      - enable_motion_compensation = false (default): Apply a single pose to the entire scan.
+//      - enable_motion_compensation = true: (Future feature) Apply per-point motion compensation
+//            using odometry velocities to undistort points within the scan.
 //=======================================================================================================================================
 
 #include <ros/ros.h>
@@ -129,6 +143,10 @@ bool   pcd_save_en = true;  // always true – the whole purpose of this node
 /*** LiDAR-to-IMU extrinsic (loaded from parameters, used only with CustomMsg) ***/
 Matrix3d Lidar_R_wrt_IMU = Matrix3d::Identity();
 Vector3d Lidar_T_wrt_IMU = Vector3d::Zero();
+
+/*** Temporal synchronization and motion compensation ***/
+double temporal_offset = 0.0;  // time offset to apply to the scan timestamp (in seconds)
+bool   enable_motion_compensation = false;  // apply per-point motion compensation using odometry velocities
 
 // ---------------------------------------------------------------------------
 // calc_dist  (same as in common_lib.h)
@@ -402,12 +420,16 @@ bool sync_packages(PointCloudXYZI::Ptr &scan_out, double &scan_time_out,
 
     scan_time_out = time_buffer.front();
 
-    // Need at least one odom message at or after the scan time
-    if (odom_buffer.back().time < scan_time_out)
+    // Apply temporal offset correction to the scan timestamp
+    // This helps align the scan with the odometry when there is a systematic time lag
+    double adjusted_scan_time = scan_time_out + temporal_offset;
+
+    // Need at least one odom message at or after the adjusted scan time
+    if (odom_buffer.back().time < adjusted_scan_time)
         return false;
 
-    // Look up the interpolated pose at the scan timestamp
-    if (!lookupPose(scan_time_out, pose_out))
+    // Look up the interpolated pose at the adjusted scan timestamp
+    if (!lookupPose(adjusted_scan_time, pose_out))
         return false;
 
     scan_out = lidar_buffer.front();
@@ -588,6 +610,8 @@ int main(int argc, char **argv)
     pnh.param<bool>  ("use_ikdtree",        use_ikdtree,        false);
     pnh.param<bool>  ("use_custom_msg",     use_custom_msg,     false);
     pnh.param<bool>  ("flat_ground_mode",   flat_ground_mode,    false);
+    pnh.param<double>("temporal_offset",    temporal_offset,     0.0);
+    pnh.param<bool>  ("enable_motion_compensation", enable_motion_compensation, false);
 
     /*** Load LiDAR-to-IMU extrinsic from the mapping config (same params as Fast-LIO2) ***/
     vector<double> extrinT(3, 0.0);
@@ -607,6 +631,8 @@ int main(int argc, char **argv)
     cout << "======================================================" << endl;
     cout << "[mapBuilder] Subscribing odometry  : " << odom_topic  << endl;
     cout << "[mapBuilder] Flat ground mode      : " << (flat_ground_mode ? "ENABLED (roll/pitch constrained to zero)" : "DISABLED (full 6-DOF odometry)") << endl;
+    cout << "[mapBuilder] Temporal offset       : " << temporal_offset << " s" << endl;
+    cout << "[mapBuilder] Motion compensation   : " << (enable_motion_compensation ? "ENABLED" : "DISABLED") << endl;
     if (use_custom_msg)
     {
         cout << "[mapBuilder] Subscribing lidar     : " << lidar_topic << " (CustomMsg)" << endl;
