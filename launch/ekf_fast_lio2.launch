@@ -60,5 +60,8 @@
 
     <!-- Publishing -->
     <param name="publish_map_en"      value="true" />
+
+    <!-- Flat ground mode: for robots on flat surfaces, constrain roll and pitch to zero -->
+    <param name="flat_ground_mode" value="false" />
   </node>
 </launch>
