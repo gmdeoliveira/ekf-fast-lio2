@@ -432,6 +432,14 @@ bool sync_packages(PointCloudXYZI::Ptr &scan_out, double &scan_time_out,
     if (!lookupPose(adjusted_scan_time, pose_out))
         return false;
 
+    // Debug: Print timestamp difference
+    if (odom_buffer.size() > 0) {
+        double odom_time = odom_buffer.front().time;
+        double diff = timestamp - odom_time;
+        ROS_INFO("[mapBuilder] Timestamp difference: lidar=%f, odom=%f, diff=%f", 
+                 timestamp, odom_time, diff);
+    }
+
     scan_out = lidar_buffer.front();
     lidar_buffer.pop_front();
     time_buffer.pop_front();
@@ -681,7 +689,7 @@ int main(int argc, char **argv)
 
     /*** Ctrl+C handler  (same as laserMapping.cpp) ***/
     signal(SIGINT, SigHandle);
-    ros::Rate rate(5000);
+    ros::Rate rate(200);
     bool status = ros::ok();
 
     while (status)
