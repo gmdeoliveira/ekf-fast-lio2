@@ -24,6 +24,12 @@ mapping:
     extrinsic_R: [ 1, 0, 0, 
                    0, 1, 0, 
                    0, 0, 1]
+    # -------------------------------------------------------------------------
+    # Use the fused odometry produced by EKFAdaptiveFilter (/filter_odom)
+    # as the pose reference inside the mapping process. See mid360_gazebo.yaml
+    # for a detailed description.
+    # -------------------------------------------------------------------------
+    use_filter_odom: true
 
 publish:
     path_en:  false
