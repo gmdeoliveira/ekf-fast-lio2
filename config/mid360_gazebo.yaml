@@ -22,6 +22,15 @@ mapping:
     extrinsic_R: [ 1, 0, 0,
                    0, 1, 0,
                    0, 0, 1]
+    # -------------------------------------------------------------------------
+    # Use the fused odometry produced by EKFAdaptiveFilter (/filter_odom)
+    # as the pose reference inside the mapping process.
+    # When true, laserMapping subscribes to `adaptive_filter/filterTopic` and
+    # overwrites the IKF pose (position + orientation) after IMU propagation
+    # and before the iterated LiDAR update, so the map-increment step uses
+    # the fused LiDAR + wheel + IMU pose.
+    # -------------------------------------------------------------------------
+    use_filter_odom: true
 
 publish:
     path_en:  true

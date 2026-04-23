@@ -12,14 +12,26 @@
 	<param name="cube_side_length" type="double" value="1000" />
 	<param name="runtime_pos_log_enable" type="bool" value="0" />
 	
-  <node pkg="ekf_fast_lio2" 
-		  type="fastlio_mapping" 
-		  name="laserMapping" 
-		  output="screen" /> 
+  <!--
+    Data flow
+    =========
+      /livox/lidar + /imu/data ─► laserMapping ─► /Odometry ─┐
+                                                             │
+                       /wheel_odom ────────────────────────► EKFAdaptiveFilter ─► /filter_odom
+                       /imu/data  ────────────────────────►                                   │
+                                                                                              │
+      laserMapping (if mapping/use_filter_odom: true) subscribes to ◄──────────────────────── /filter_odom
+      and uses the fused pose as reference for the mapping / ikd-Tree update step.
+  -->
+
+  <node pkg="ekf_fast_lio2"
+		  type="fastlio_mapping"
+		  name="laserMapping"
+		  output="screen" />
 
   <!-- Launch the EKF node -->
-  <node pkg="ekf_fast_lio2" 
-        type="EKFAdaptiveFilter" 
-        name="EKFAdaptiveFilter" 
+  <node pkg="ekf_fast_lio2"
+        type="EKFAdaptiveFilter"
+        name="EKFAdaptiveFilter"
         output="screen"/>
 </launch>

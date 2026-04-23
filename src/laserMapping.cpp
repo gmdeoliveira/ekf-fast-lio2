@@ -82,7 +82,14 @@ mutex mtx_buffer;
 condition_variable sig_buffer;
 
 string root_dir = ROOT_DIR;
-string map_file_path, lid_topic, imu_topic;
+string map_file_path, lid_topic, imu_topic, filter_odom_topic;
+
+/*** Filter odometry feedback (from EKFAdaptiveFilter -> /filter_odom) ***/
+bool   use_filter_odom = false;       // master switch, loaded from YAML
+bool   filter_odom_received = false;  // becomes true after first message
+double last_filter_odom_time = -1.0;
+nav_msgs::Odometry latest_filter_odom;
+mutex  mtx_filter_odom;
 
 double res_mean_last = 0.05, total_residual = 0.0;
 double last_timestamp_lidar = 0, last_timestamp_imu = -1.0;
@@ -363,6 +370,15 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
     sig_buffer.notify_all();
 }
 
+/*** Filter odometry callback (output of EKFAdaptiveFilter on /filter_odom) ***/
+void filter_odom_cbk(const nav_msgs::Odometry::ConstPtr &msg_in)
+{
+    std::lock_guard<std::mutex> lock(mtx_filter_odom);
+    latest_filter_odom = *msg_in;
+    last_filter_odom_time = msg_in->header.stamp.toSec();
+    filter_odom_received = true;
+}
+
 double lidar_mean_scantime = 0.0;
 int    scan_num = 0;
 bool sync_packages(MeasureGroup &meas)
@@ -586,6 +602,72 @@ void set_posestamp(T & out)
     
 }
 
+/**
+ * @brief Overwrite the pose (pos + rot) of the IKF state with the latest
+ *        filtered odometry produced by EKFAdaptiveFilter (/filter_odom).
+ *
+ * This is called right after IMU forward-propagation and before the
+ * iterated LiDAR update, so the map-incremental step and the optimisation
+ * are anchored on the fused (LiDAR + wheel + IMU) pose instead of the
+ * IKF internal prediction only.
+ *
+ * The velocity, biases and gravity components of the state are kept as-is,
+ * because the filter_odom message only provides pose (+ body-twist).
+ *
+ * @return true if the state was overwritten, false otherwise.
+ */
+bool inject_filter_odom_into_state()
+{
+    if (!use_filter_odom) return false;
+    if (!filter_odom_received) {
+        ROS_WARN_THROTTLE(5.0,
+            "[laserMapping] use_filter_odom=true but no message received yet "
+            "on %s. Falling back to internal IKF state.",
+            filter_odom_topic.c_str());
+        return false;
+    }
+
+    nav_msgs::Odometry odom_local;
+    {
+        std::lock_guard<std::mutex> lock(mtx_filter_odom);
+        odom_local = latest_filter_odom;
+    }
+
+    // Sanity check: filter odom should not be older than 0.5 s relative to
+    // the current lidar frame, otherwise we are feeding stale data.
+    const double age = lidar_end_time - odom_local.header.stamp.toSec();
+    if (std::fabs(age) > 0.5) {
+        ROS_WARN_THROTTLE(2.0,
+            "[laserMapping] filter_odom is stale (age = %.3f s). "
+            "Skipping injection for this scan.", age);
+        return false;
+    }
+
+    state_ikfom s = kf.get_x();
+
+    // Position
+    s.pos(0) = odom_local.pose.pose.position.x;
+    s.pos(1) = odom_local.pose.pose.position.y;
+    s.pos(2) = odom_local.pose.pose.position.z;
+
+    // Orientation (Eigen quaternion, normalised to avoid drift of the SO3)
+    Eigen::Quaterniond q(
+        odom_local.pose.pose.orientation.w,
+        odom_local.pose.pose.orientation.x,
+        odom_local.pose.pose.orientation.y,
+        odom_local.pose.pose.orientation.z);
+    if (q.norm() < 1e-6) {
+        ROS_WARN_THROTTLE(2.0,
+            "[laserMapping] filter_odom has zero-norm quaternion, skipping.");
+        return false;
+    }
+    q.normalize();
+    s.rot = SO3(q);
+
+    kf.change_x(s);
+    return true;
+}
+
 void publish_odometry(const ros::Publisher & pubOdomAftMapped)
 {
     odomAftMapped.header.frame_id = "camera_init";
@@ -792,6 +874,12 @@ int main(int argc, char** argv)
     nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
     nh.param<vector<double>>("mapping/extrinsic_R", extrinR, vector<double>());
 
+    /*** Filter odometry feedback parameters (from EKFAdaptiveFilter) ***/
+    nh.param<bool>("mapping/use_filter_odom", use_filter_odom, false);
+    nh.param<string>("adaptive_filter/filterTopic", filter_odom_topic, "/filter_odom");
+    ROS_INFO("[laserMapping] use_filter_odom = %s (topic: %s)",
+             use_filter_odom ? "true" : "false", filter_odom_topic.c_str());
+
     p_pre->lidar_type = lidar_type;
     cout<<"p_pre->lidar_type "<<p_pre->lidar_type<<endl;
     
@@ -847,6 +935,14 @@ int main(int argc, char** argv)
         nh.subscribe(lid_topic, 200000, livox_pcl_cbk) : \
         nh.subscribe(lid_topic, 200000, standard_pcl_cbk);
     ros::Subscriber sub_imu = nh.subscribe(imu_topic, 200000, imu_cbk);
+
+    /*** Subscribe to filtered odometry (only if the feature is enabled) ***/
+    ros::Subscriber sub_filter_odom;
+    if (use_filter_odom) {
+        sub_filter_odom = nh.subscribe(filter_odom_topic, 200, filter_odom_cbk);
+        ROS_INFO("[laserMapping] Subscribed to filtered odometry on %s",
+                 filter_odom_topic.c_str());
+    }
     ros::Publisher pubLaserCloudFull = nh.advertise<sensor_msgs::PointCloud2>
             ("/cloud_registered", 100000);
     ros::Publisher pubLaserCloudFull_body = nh.advertise<sensor_msgs::PointCloud2>
@@ -887,6 +983,14 @@ int main(int argc, char** argv)
             t0 = omp_get_wtime();
 
             p_imu->Process(Measures, kf, feats_undistort);
+
+            /*** If enabled, overwrite the IKF pose with the fused odometry
+             *   coming from EKFAdaptiveFilter (/filter_odom). This happens
+             *   AFTER IMU propagation and BEFORE the iterated LiDAR update,
+             *   so that lasermap_fov_segment() / point undistort / map
+             *   increment all use the fused pose as their reference. ***/
+            inject_filter_odom_into_state();
+
             state_point = kf.get_x();
             pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
 

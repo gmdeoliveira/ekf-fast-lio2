@@ -23,3 +23,10 @@
   gamma_omegaz: 0.01
   delta_vx: 0.0001
   delta_omegaz: 0.00001
+
+# -----------------------------------------------------------------------------
+# NOTE: The mapping-side feedback flag `mapping/use_filter_odom` that controls
+# whether laserMapping consumes /filter_odom lives in the sensor YAML
+# (e.g. config/mid360_gazebo.yaml) together with the other `mapping/*`
+# parameters, so that all mapping options stay grouped.
+# -----------------------------------------------------------------------------

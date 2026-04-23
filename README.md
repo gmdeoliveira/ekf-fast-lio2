@@ -103,6 +103,52 @@ The configuration file is located at `config/adaptive_filter_parameters.yaml`. K
 
 ---
 
+## 🔁 Feeding the filtered odometry back into the mapping process
+
+The mapping node (`laserMapping`) can optionally consume `/filter_odom` and
+use the fused LiDAR + wheel + IMU pose as the reference for the ikd-Tree map
+update, instead of the Fast-LIO2 internal prediction alone.
+
+### How it works
+
+1. `p_imu->Process()` propagates the IKF state forward with IMU integration.
+2. **If `mapping/use_filter_odom: true`**, `laserMapping` overwrites the
+   `pos` and `rot` fields of the IKF state (`kf.change_x`) with the latest
+   message received on `adaptive_filter/filterTopic` (default
+   `/filter_odom`). Velocities, biases and gravity are kept as-is.
+3. `lasermap_fov_segment()`, point undistortion, the iterated LiDAR update
+   and `map_incremental()` then run on top of this fused pose.
+
+The feedback is automatically skipped while `EKFAdaptiveFilter` has not
+produced its first message yet (cold start) and whenever the message is
+older than 0.5 s, so mapping keeps working even if the filter is stopped
+or delayed.
+
+### How to enable it
+
+In the sensor YAML (`config/mid360_gazebo.yaml` or
+`config/velodyne_gazebo.yaml`):
+
+```yaml
+mapping:
+    # ... other mapping options ...
+    use_filter_odom: true   # set to false to fall back to stock Fast-LIO2
+```
+
+The topic name is read from the adaptive-filter namespace:
+
+```yaml
+adaptive_filter:
+    filterTopic: "/filter_odom"
+```
+
+No extra launch configuration is required — the existing
+`ekf_fast_lio2.launch` starts both `laserMapping` and `EKFAdaptiveFilter`;
+once the filter begins publishing, the mapper starts using its output
+automatically.
+
+---
+
 ## 📂 File Structure
 
 
